@@ -56,6 +56,11 @@ func main() {
 	createWatcherFor("deployments", m, &v1apps.Deployment{}, clientset.AppsV1().RESTClient())
 	createWatcherFor("services", m, &v1.Service{}, clientset.CoreV1().RESTClient())
 	createWatcherFor("configmaps", m, &v1.ConfigMap{}, clientset.CoreV1().RESTClient())
+	createWatcherFor("secrets", m, &v1.Secret{}, clientset.CoreV1().RESTClient())
+	createWatcherFor("replicasets", m, &v1apps.ReplicaSet{}, clientset.AppsV1().RESTClient())
+	//createWatcherFor("ds", m, &v1apps.DaemonSet{}, clientset.AppsV1().RESTClient())
+
+	pods := clientset.CoreV1().Pods("default")
 
 	r.GET("/", func(c *gin.Context) {
 		http.ServeFile(c.Writer, c.Request, "websocket.html")
@@ -128,7 +133,6 @@ func main() {
 	})
 
 	r.GET("/pods", func(c *gin.Context) {
-		pods := clientset.CoreV1().Pods("default")
 
 		podList, err := pods.List(context.Background(), v1meta.ListOptions{})
 
@@ -136,6 +140,16 @@ func main() {
 			log.Fatalf("couldn't get deployments err: %v", err)
 		}
 		c.JSON(200, podList.Items)
+	})
+
+	r.DELETE("/pod/:name", func(c *gin.Context) {
+		name := c.Param("name")
+		err := pods.Delete(context.Background(), name, v1meta.DeleteOptions{})
+		if err != nil {
+			c.AbortWithError(500, err)
+			return
+		}
+		c.Status(200)
 	})
 
 	r.GET("/ws", func(c *gin.Context) {
