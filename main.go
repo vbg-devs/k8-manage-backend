@@ -121,10 +121,10 @@ func main() {
 
 	r.GET("/pods", func(c *gin.Context) {
 
-		pods := []string{}
+		pods := []v1.Pod{}
 
 		for _, p := range podList.Items {
-			pods = append(pods, p.GetName())
+			pods = append(pods, p)
 		}
 		c.JSON(200, pods)
 	})
