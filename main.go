@@ -2,8 +2,8 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
-	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -65,13 +65,6 @@ func main() {
 		log.Fatalf("couldn't get deployments err: %v", err)
 	}
 
-	for _, p := range podList.Items {
-		log.Printf("got pods %s in namespace %s", p.GetName(), p.GetNamespace())
-		for k, v := range p.GetLabels() {
-			log.Printf("pod %s labels %s : %s", p.GetName(), k, v)
-		}
-	}
-
 	r := gin.Default()
 	m := melody.New()
 
@@ -87,27 +80,67 @@ func main() {
 				if !ok {
 					log.Fatalf("list/watch returned non-pod object: %T", pod)
 				}
-				msg := fmt.Sprintf("pod added: %s", pod.GetName())
-				fmt.Println(msg)
-				m.Broadcast([]byte(msg))
+
+				msgObj := wsMessage{
+					Type: "pod-added",
+					Data: pod,
+				}
+
+				msg, err := json.Marshal(msgObj)
+
+				if err != nil {
+					log.Fatalf("pod added json marshal err: %v", err)
+				}
+				log.Printf("Message sent: %v", msgObj)
+				m.Broadcast(msg)
 			},
 			DeleteFunc: func(obj interface{}) {
 				pod, ok := obj.(*v1.Pod)
 				if !ok {
 					log.Fatalf("list/watch returned non-pod object: %T", pod)
 				}
-				msg := fmt.Sprintf("pod deleted: %s", pod.GetName())
-				fmt.Println(msg)
-				m.Broadcast([]byte(msg))
+
+				msgObj := wsMessage{
+					Type: "pod-deleted",
+					Data: pod,
+				}
+
+				msg, err := json.Marshal(msgObj)
+
+				if err != nil {
+					log.Fatalf("pod deleted json marshal err: %v", err)
+				}
+				log.Printf("Message sent: %v", msgObj)
+				m.Broadcast(msg)
 			},
 			UpdateFunc: func(oldObj, newObj interface{}) {
-				pod, ok := newObj.(*v1.Pod)
+				newPod, ok := newObj.(*v1.Pod)
 				if !ok {
-					log.Fatalf("list/watch returned non-pod object: %T", pod)
+					log.Fatalf("list/watch returned non-pod object: %T", newPod)
 				}
-				msg := fmt.Sprintf("pod changed: %s", pod.GetName())
-				fmt.Println(msg)
-				m.Broadcast([]byte(msg))
+
+				oldPod, ok := oldObj.(*v1.Pod)
+				if !ok {
+					log.Fatalf("list/watch returned non-pod object: %T", oldPod)
+				}
+
+				data := modifiedPod{
+					NewPod: newPod,
+					OldPod: oldPod,
+				}
+
+				msgObj := wsMessage{
+					Type: "pod-modified",
+					Data: data,
+				}
+
+				msg, err := json.Marshal(msgObj)
+
+				if err != nil {
+					log.Fatalf("pod added json marshal err: %v", err)
+				}
+				log.Printf("Message sent: %v", msgObj.Data)
+				m.Broadcast(msg)
 			},
 		},
 	)
@@ -120,13 +153,7 @@ func main() {
 	})
 
 	r.GET("/pods", func(c *gin.Context) {
-
-		pods := []v1.Pod{}
-
-		for _, p := range podList.Items {
-			pods = append(pods, p)
-		}
-		c.JSON(200, pods)
+		c.JSON(200, podList.Items)
 	})
 
 	r.GET("/ws", func(c *gin.Context) {
@@ -139,6 +166,20 @@ func main() {
 
 	r.Run(":5000")
 
+}
+
+type wsMessage struct {
+	Type string      `json:"type"`
+	Data interface{} `json:"data"`
+}
+
+type modifiedPod struct {
+	NewPod *v1.Pod `json:"new_pod"`
+	OldPod *v1.Pod `json:"old_pod"`
+}
+
+type wsError struct {
+	Error string `json:"error"`
 }
 
 func homeDir() string {
