@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -12,10 +13,13 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/olahol/melody"
+	v1apps "k8s.io/api/apps/v1"
 	v1 "k8s.io/api/core/v1"
 	v1meta "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/clientcmd"
 )
@@ -45,114 +49,92 @@ func main() {
 		panic(err.Error())
 	}
 
-	deployments := clientset.AppsV1().Deployments("default")
-
-	deployList, err := deployments.List(context.Background(), v1meta.ListOptions{})
-
-	if err != nil {
-		log.Fatalf("couldn't get deployments err: %v", err)
-	}
-
-	for _, d := range deployList.Items {
-		log.Printf("got deployment %s in namespace %s", d.GetName(), d.GetNamespace())
-	}
-
-	pods := clientset.CoreV1().Pods("default")
-
-	podList, err := pods.List(context.Background(), v1meta.ListOptions{})
-
-	if err != nil {
-		log.Fatalf("couldn't get deployments err: %v", err)
-	}
-
 	r := gin.Default()
 	m := melody.New()
 
-	watchlist := cache.NewListWatchFromClient(clientset.CoreV1().RESTClient(), "pods", v1meta.NamespaceDefault,
-		fields.Everything())
-	_, controller := cache.NewInformer(
-		watchlist,
-		&v1.Pod{},
-		time.Second*0,
-		cache.ResourceEventHandlerFuncs{
-			AddFunc: func(obj interface{}) {
-				pod, ok := obj.(*v1.Pod)
-				if !ok {
-					log.Fatalf("list/watch returned non-pod object: %T", pod)
-				}
-
-				msgObj := wsMessage{
-					Type: "pod-added",
-					Data: pod,
-				}
-
-				msg, err := json.Marshal(msgObj)
-
-				if err != nil {
-					log.Fatalf("pod added json marshal err: %v", err)
-				}
-				log.Printf("Message sent: %v", msgObj)
-				m.Broadcast(msg)
-			},
-			DeleteFunc: func(obj interface{}) {
-				pod, ok := obj.(*v1.Pod)
-				if !ok {
-					log.Fatalf("list/watch returned non-pod object: %T", pod)
-				}
-
-				msgObj := wsMessage{
-					Type: "pod-deleted",
-					Data: pod,
-				}
-
-				msg, err := json.Marshal(msgObj)
-
-				if err != nil {
-					log.Fatalf("pod deleted json marshal err: %v", err)
-				}
-				log.Printf("Message sent: %v", msgObj)
-				m.Broadcast(msg)
-			},
-			UpdateFunc: func(oldObj, newObj interface{}) {
-				newPod, ok := newObj.(*v1.Pod)
-				if !ok {
-					log.Fatalf("list/watch returned non-pod object: %T", newPod)
-				}
-
-				oldPod, ok := oldObj.(*v1.Pod)
-				if !ok {
-					log.Fatalf("list/watch returned non-pod object: %T", oldPod)
-				}
-
-				data := modifiedPod{
-					NewPod: newPod,
-					OldPod: oldPod,
-				}
-
-				msgObj := wsMessage{
-					Type: "pod-modified",
-					Data: data,
-				}
-
-				msg, err := json.Marshal(msgObj)
-
-				if err != nil {
-					log.Fatalf("pod added json marshal err: %v", err)
-				}
-				log.Printf("Message sent: %v", msgObj.Data)
-				m.Broadcast(msg)
-			},
-		},
-	)
-
-	stop := make(chan struct{})
-	go controller.Run(stop)
+	createWatcherFor("pods", m, &v1.Pod{}, clientset.CoreV1().RESTClient())
+	createWatcherFor("deployments", m, &v1apps.Deployment{}, clientset.AppsV1().RESTClient())
+	createWatcherFor("services", m, &v1.Service{}, clientset.CoreV1().RESTClient())
+	createWatcherFor("configmaps", m, &v1.ConfigMap{}, clientset.CoreV1().RESTClient())
 
 	r.GET("/", func(c *gin.Context) {
 		http.ServeFile(c.Writer, c.Request, "websocket.html")
 	})
 
+	r.GET("/secrets", func(c *gin.Context) {
+		secrets := clientset.CoreV1().Secrets("default")
+
+		secretList, err := secrets.List(context.Background(), v1meta.ListOptions{})
+
+		if err != nil {
+			log.Fatalf("couldn't get rs err: %v", err)
+		}
+		c.JSON(200, secretList.Items)
+	})
+
+	r.GET("/configmaps", func(c *gin.Context) {
+		configMaps := clientset.CoreV1().ConfigMaps("default")
+
+		configMapList, err := configMaps.List(context.Background(), v1meta.ListOptions{})
+
+		if err != nil {
+			log.Fatalf("couldn't get rs err: %v", err)
+		}
+		c.JSON(200, configMapList.Items)
+	})
+
+	r.GET("/services", func(c *gin.Context) {
+		services := clientset.CoreV1().Services("default")
+
+		serviceList, err := services.List(context.Background(), v1meta.ListOptions{})
+
+		if err != nil {
+			log.Fatalf("couldn't get rs err: %v", err)
+		}
+		c.JSON(200, serviceList.Items)
+	})
+
+	r.GET("/replicasets", func(c *gin.Context) {
+		rs := clientset.AppsV1().ReplicaSets("default")
+
+		rsList, err := rs.List(context.Background(), v1meta.ListOptions{})
+
+		if err != nil {
+			log.Fatalf("couldn't get rs err: %v", err)
+		}
+		c.JSON(200, rsList.Items)
+	})
+
+	r.GET("/deamonsets", func(c *gin.Context) {
+		deamonSets := clientset.AppsV1().DaemonSets("default")
+
+		dsList, err := deamonSets.List(context.Background(), v1meta.ListOptions{})
+
+		if err != nil {
+			log.Fatalf("couldn't get rs err: %v", err)
+		}
+		c.JSON(200, dsList.Items)
+	})
+
+	r.GET("/deployments", func(c *gin.Context) {
+		deployments := clientset.AppsV1().Deployments("default")
+
+		deployList, err := deployments.List(context.Background(), v1meta.ListOptions{})
+
+		if err != nil {
+			log.Fatalf("couldn't get deployments err: %v", err)
+		}
+		c.JSON(200, deployList.Items)
+	})
+
 	r.GET("/pods", func(c *gin.Context) {
+		pods := clientset.CoreV1().Pods("default")
+
+		podList, err := pods.List(context.Background(), v1meta.ListOptions{})
+
+		if err != nil {
+			log.Fatalf("couldn't get deployments err: %v", err)
+		}
 		c.JSON(200, podList.Items)
 	})
 
@@ -187,4 +169,70 @@ func homeDir() string {
 		return h
 	}
 	return os.Getenv("USERPROFILE") // windows
+}
+
+func createWatcherFor(resource string, m *melody.Melody, obj runtime.Object, rest rest.Interface) {
+	watchlist := cache.NewListWatchFromClient(rest, resource, v1meta.NamespaceDefault,
+		fields.Everything())
+	_, controller := cache.NewInformer(
+		watchlist,
+		obj,
+		time.Second*0,
+		cache.ResourceEventHandlerFuncs{
+			AddFunc: func(obj interface{}) {
+				msgObj := wsMessage{
+					Type: fmt.Sprintf("%s-added", resource),
+					Data: obj,
+				}
+
+				msg, err := json.Marshal(msgObj)
+
+				if err != nil {
+					log.Fatalf("pod added json marshal err: %v", err)
+				}
+				log.Printf("Message sent: %v", msgObj)
+				m.Broadcast(msg)
+			},
+			DeleteFunc: func(obj interface{}) {
+				msgObj := wsMessage{
+					Type: fmt.Sprintf("%s-deleted", resource),
+					Data: obj,
+				}
+
+				msg, err := json.Marshal(msgObj)
+
+				if err != nil {
+					log.Fatalf("pod deleted json marshal err: %v", err)
+				}
+				log.Printf("Message sent: %v", msgObj)
+				m.Broadcast(msg)
+			},
+			UpdateFunc: func(oldObj, newObj interface{}) {
+
+				data := struct {
+					New interface{}
+					Old interface{}
+				}{
+					New: newObj,
+					Old: oldObj,
+				}
+
+				msgObj := wsMessage{
+					Type: fmt.Sprintf("%s-modified", resource),
+					Data: data,
+				}
+
+				msg, err := json.Marshal(msgObj)
+
+				if err != nil {
+					log.Fatalf("pod added json marshal err: %v", err)
+				}
+				log.Printf("Message sent: %v", msgObj.Data)
+				m.Broadcast(msg)
+			},
+		},
+	)
+
+	stop := make(chan struct{})
+	go controller.Run(stop)
 }
