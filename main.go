@@ -13,6 +13,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/olahol/melody"
+	cors "github.com/rs/cors/wrapper/gin"
 	v1apps "k8s.io/api/apps/v1"
 	v1 "k8s.io/api/core/v1"
 	v1meta "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -50,6 +51,8 @@ func main() {
 	}
 
 	r := gin.Default()
+	r.Use(cors.AllowAll())
+
 	m := melody.New()
 
 	createWatcherFor("pods", m, &v1.Pod{}, clientset.CoreV1().RESTClient())
