@@ -61,6 +61,7 @@ func main() {
 	//createWatcherFor("ds", m, &v1apps.DaemonSet{}, clientset.AppsV1().RESTClient())
 
 	pods := clientset.CoreV1().Pods("default")
+	deployments := clientset.AppsV1().Deployments("default")
 
 	r.GET("/", func(c *gin.Context) {
 		http.ServeFile(c.Writer, c.Request, "websocket.html")
@@ -122,7 +123,6 @@ func main() {
 	})
 
 	r.GET("/deployments", func(c *gin.Context) {
-		deployments := clientset.AppsV1().Deployments("default")
 
 		deployList, err := deployments.List(context.Background(), v1meta.ListOptions{})
 
@@ -130,6 +130,38 @@ func main() {
 			log.Fatalf("couldn't get deployments err: %v", err)
 		}
 		c.JSON(200, deployList.Items)
+	})
+
+	type DeploymentScaleRequest struct {
+		Replicas int32 `json:"replicas"`
+	}
+
+	r.POST("/deployment/scale/:name", func(c *gin.Context) {
+		name := c.Param("name")
+
+		req := DeploymentScaleRequest{}
+
+		err := c.BindJSON(&req)
+		if err != nil {
+			log.Fatalf("couldn't parse json err: %v", err)
+		}
+
+		log.Printf("Hmm %s", name)
+
+		currentScale, err := deployments.GetScale(context.Background(), name, v1meta.GetOptions{})
+		if err != nil {
+			log.Fatalf("couldn't get  scale err: %v scale:%v", err, req)
+		}
+
+		currentScale.Spec.Replicas = req.Replicas
+
+		scale, err := deployments.UpdateScale(context.Background(), name, currentScale,
+			v1meta.UpdateOptions{})
+
+		if err != nil {
+			log.Fatalf("couldn't update deployment scale err: %v scale:%v", err, req)
+		}
+		c.JSON(200, scale)
 	})
 
 	r.GET("/pods", func(c *gin.Context) {
